@@ -175,11 +175,7 @@ class MainWindow(QMainWindow):
         gen_action.triggered.connect(self._on_generate_data)
         data_menu.addAction(gen_action)
 
-        reload_action = QAction("重新加载数据", self)
-        reload_action.triggered.connect(self._try_load_data)
-        data_menu.addAction(reload_action)
 
-        data_menu.addSeparator()
 
         delete_action = QAction("删除所有数据", self)
         delete_action.triggered.connect(self._on_delete_data)
@@ -400,14 +396,34 @@ class MainWindow(QMainWindow):
         if not data_file_exists("videos.json"):
             self.status_label.setText("数据文件不存在，请先生成数据")
             self.data_label.setText("📊 视频: 0 | 👤 用户: 0 | 📝 行为: 0")
+            QMessageBox.information(self, "提示", "数据文件不存在，请先通过菜单「数据管理 → 生成模拟数据」生成。")
             return
+
+        # 显示加载进度对话框
+        self.load_dlg = QProgressDialog("正在加载数据...", None, 0, 0, self)
+        self.load_dlg.setWindowTitle("加载数据")
+        self.load_dlg.setWindowModality(Qt.WindowModal)
+        self.load_dlg.setMinimumWidth(350)
+        self.load_dlg.setCancelButton(None)  # 不可取消
+        self.load_dlg.show()
+        QApplication.processEvents()
 
         self.status_label.setText("正在加载数据...")
         self.loader = DataLoader()
-        self.loader.progress.connect(lambda msg: self.status_label.setText(msg))
+        self.loader.progress.connect(self._on_load_progress)
         self.loader.finished.connect(self._on_data_loaded)
-        self.loader.error.connect(lambda e: QMessageBox.critical(self, "错误", f"加载失败: {e}"))
+        self.loader.error.connect(self._on_load_error)
         self.loader.start()
+
+    def _on_load_progress(self, msg):
+        self.status_label.setText(msg)
+        if hasattr(self, 'load_dlg') and self.load_dlg:
+            self.load_dlg.setLabelText(msg)
+
+    def _on_load_error(self, err):
+        if hasattr(self, 'load_dlg') and self.load_dlg:
+            self.load_dlg.close()
+        QMessageBox.critical(self, "错误", f"加载失败: {err}")
 
     def _on_data_loaded(self, data):
         """数据加载完成"""
@@ -426,6 +442,23 @@ class MainWindow(QMainWindow):
         self.overview_page.refresh_data()
         self.video_page.refresh_data()
         self.user_page.refresh_data()
+
+        # 重置分析页面的缓存（数据变了，旧矩阵无效）
+        self.similar_page._matrix_built = False
+        self.recommend_page._matrix_built = False
+        self.predict_page._series_built = False
+
+        # 关闭进度框并提示
+        if hasattr(self, 'load_dlg') and self.load_dlg:
+            self.load_dlg.close()
+
+        QMessageBox.information(
+            self, "加载完成",
+            f"数据加载成功！\n\n"
+            f"📊 视频: {len(self.videos):,} 条\n"
+            f"👤 用户: {len(self.users):,} 个\n"
+            f"📝 行为: {len(self.behaviors):,} 条"
+        )
 
     def _show_about(self):
         QMessageBox.about(
