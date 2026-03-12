@@ -76,6 +76,10 @@ class VideoPage(QWidget):
         self.result_label.setStyleSheet("color: #7f8c8d; font-size: 13px;")
         list_layout.addWidget(self.result_label)
 
+        # 上下分割：表格 + 详情
+        from PyQt5.QtWidgets import QSplitter
+        splitter = QSplitter(Qt.Vertical)
+
         self.table = QTableWidget()
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
@@ -87,7 +91,42 @@ class VideoPage(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        list_layout.addWidget(self.table)
+        self.table.currentCellChanged.connect(self._on_video_clicked)
+        splitter.addWidget(self.table)
+
+        # 视频详情面板
+        detail_widget = QWidget()
+        detail_widget.setStyleSheet("""
+            QWidget { background: white; border-radius: 8px; }
+        """)
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(20, 12, 20, 12)
+
+        self.detail_title = QLabel("点击上方表格中的视频查看详情")
+        self.detail_title.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+        self.detail_title.setStyleSheet("color: #2c3e50; border: none;")
+        detail_layout.addWidget(self.detail_title)
+
+        self.detail_info = QLabel("")
+        self.detail_info.setWordWrap(True)
+        self.detail_info.setStyleSheet("color: #555; font-size: 13px; border: none; line-height: 1.6;")
+        detail_layout.addWidget(self.detail_info)
+
+        # 统计卡片行
+        stats_row = QHBoxLayout()
+        self.view_card = self._create_detail_card("👁 观看量", "—", "#3498db")
+        self.like_card = self._create_detail_card("👍 点赞量", "—", "#e74c3c")
+        self.fav_card = self._create_detail_card("⭐ 收藏量", "—", "#f39c12")
+        self.heat_card = self._create_detail_card("🔥 综合热度", "—", "#9b59b6")
+        stats_row.addWidget(self.view_card)
+        stats_row.addWidget(self.like_card)
+        stats_row.addWidget(self.fav_card)
+        stats_row.addWidget(self.heat_card)
+        detail_layout.addLayout(stats_row)
+
+        splitter.addWidget(detail_widget)
+        splitter.setSizes([500, 200])
+        list_layout.addWidget(splitter)
 
         self.tabs.addTab(list_tab, "📋 视频列表")
 
@@ -321,3 +360,83 @@ class VideoPage(QWidget):
 
         self.figure.tight_layout()
         self.canvas.draw()
+
+    # ================== 视频详情面板 ==================
+
+    def _create_detail_card(self, title, value, color):
+        """创建统计卡片"""
+        card = QWidget()
+        card.setStyleSheet(f"""
+            QWidget {{
+                background: #f8f9fa; border-radius: 8px;
+                border-left: 4px solid {color}; border-top: none; border-right: none; border-bottom: none;
+            }}
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 8, 12, 8)
+
+        t = QLabel(title)
+        t.setStyleSheet("color: #7f8c8d; font-size: 12px; border: none; background: transparent;")
+        v = QLabel(str(value))
+        v.setObjectName("card_val")
+        v.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: bold; border: none; background: transparent;")
+
+        card_layout.addWidget(t)
+        card_layout.addWidget(v)
+        return card
+
+    def _on_video_clicked(self, row, col, prev_row, prev_col):
+        """点击表格行时显示该视频的详情"""
+        if row < 0:
+            return
+        vid_item = self.table.item(row, 0)
+        if not vid_item:
+            return
+
+        try:
+            vid = int(vid_item.text())
+        except ValueError:
+            return
+
+        if vid < 0 or vid >= len(self.mw.videos):
+            return
+
+        import time as _time
+
+        v = self.mw.videos[vid]
+        stats = self._video_stats.get(vid, {"views": 0, "likes": 0, "favorites": 0})
+
+        # 更新标题
+        self.detail_title.setText(f"📹 {v.get('title', '')}")
+
+        # 更新基本信息
+        ts = v.get("publish_time", 0)
+        pub_date = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(ts)) if ts else "未知"
+        dur = v.get("duration", 0)
+        dur_str = f"{dur//60}分{dur%60}秒" if dur >= 60 else f"{dur}秒"
+
+        info_html = (
+            f"<b>视频ID:</b> {vid}　　"
+            f"<b>类目:</b> {v.get('category', '')}　　"
+            f"<b>标签:</b> {', '.join(v.get('tags', []))}　　"
+            f"<b>时长:</b> {dur_str}　　"
+            f"<b>作者ID:</b> {v.get('author_id', '')}　　"
+            f"<b>发布时间:</b> {pub_date}"
+        )
+        self.detail_info.setText(info_html)
+
+        # 更新统计卡片
+        views = stats["views"]
+        likes = stats["likes"]
+        favs = stats["favorites"]
+        heat = views + likes * 5 + favs * 10
+
+        self._set_card_value(self.view_card, f"{views:,}")
+        self._set_card_value(self.like_card, f"{likes:,}")
+        self._set_card_value(self.fav_card, f"{favs:,}")
+        self._set_card_value(self.heat_card, f"{heat:,}")
+
+    def _set_card_value(self, card, value):
+        label = card.findChild(QLabel, "card_val")
+        if label:
+            label.setText(value)
