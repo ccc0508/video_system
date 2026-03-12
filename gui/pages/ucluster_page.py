@@ -13,6 +13,9 @@ from core.clustering import ClusteringEngine
 
 import matplotlib
 matplotlib.use('Qt5Agg')
+import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'SimSun']
+plt.rcParams['axes.unicode_minus'] = False
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 

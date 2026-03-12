@@ -21,7 +21,8 @@ from gui.pages.predict_page import PredictPage
 from gui.pages.vcluster_page import VClusterPage
 from gui.pages.ucluster_page import UClusterPage
 
-from storage.file_manager import load_json, load_csv_all, data_file_exists
+from storage.file_manager import load_json, load_csv_all, data_file_exists, DATA_DIR, RESULTS_DIR
+import os, shutil
 
 
 class DataLoader(QThread):
@@ -177,6 +178,12 @@ class MainWindow(QMainWindow):
         reload_action = QAction("重新加载数据", self)
         reload_action.triggered.connect(self._try_load_data)
         data_menu.addAction(reload_action)
+
+        data_menu.addSeparator()
+
+        delete_action = QAction("删除所有数据", self)
+        delete_action.triggered.connect(self._on_delete_data)
+        data_menu.addAction(delete_action)
 
         # 分析菜单
         analysis_menu = menubar.addMenu("分析功能")
@@ -344,6 +351,49 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'progress_dlg') and self.progress_dlg:
             self.progress_dlg.close()
         QMessageBox.critical(self, "错误", f"生成数据时出错:\n{err}")
+
+    def _on_delete_data(self):
+        """删除所有数据文件"""
+        reply = QMessageBox.question(
+            self, "删除数据",
+            "确定要删除所有数据文件吗？\n"
+            "包括视频库、用户库、行为日志和分析结果。\n"
+            "此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            # 删除数据文件
+            for f in ['videos.json', 'users.json', 'behaviors.csv']:
+                path = os.path.join(DATA_DIR, f)
+                if os.path.exists(path):
+                    os.remove(path)
+            # 删除索引目录
+            idx_dir = os.path.join(DATA_DIR, 'indexes')
+            if os.path.exists(idx_dir):
+                shutil.rmtree(idx_dir)
+                os.makedirs(idx_dir, exist_ok=True)
+            # 删除结果目录
+            if os.path.exists(RESULTS_DIR):
+                shutil.rmtree(RESULTS_DIR)
+                os.makedirs(RESULTS_DIR, exist_ok=True)
+
+            # 清空内存数据
+            self.videos = []
+            self.users = []
+            self.behaviors = []
+
+            # 刷新UI
+            self.status_label.setText("数据已删除")
+            self.data_label.setText("📊 视频: 0 | 👤 用户: 0 | 📝 行为: 0")
+            self.overview_page.refresh_data()
+
+            QMessageBox.information(self, "完成", "所有数据已删除。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"删除数据时出错:\n{e}")
 
     def _try_load_data(self):
         """尝试加载已有数据"""
