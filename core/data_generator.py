@@ -165,11 +165,13 @@ def generate_users(count=10000, progress_callback=None):
 
 def generate_behaviors(users, videos, progress_callback=None):
     """
-    模拟用户观看行为
+    模拟用户观看行为 — 基于齐普夫分布(Zipf)的长尾模型
 
-    每个用户根据偏好标签概率性选择视频观看:
-    - 偏好匹配的视频: 高概率观看 (70%)
-    - 随机探索的视频: 低概率观看 (30%)
+    核心设计:
+    1. 视频热度服从 Zipf 分布: 极少数"爆款"视频被海量观看，大量尾部视频少人问津
+    2. 用户活跃度服从 Zipf 分布: 少数重度用户产生大量行为，多数轻度用户只看几个
+    3. 偏好池内也用 Zipf 加权: 同一类目下的视频热度也有分化
+    4. 行为类型与观看深度关联: 看得越久越可能点赞/收藏
 
     Args:
         users: 用户列表
@@ -179,7 +181,23 @@ def generate_behaviors(users, videos, progress_callback=None):
     Returns:
         行为总数
     """
-    # 建立标签 → 视频ID的索引，加速匹配
+    import numpy as np
+
+    num_videos = len(videos)
+    total_users = len(users)
+
+    # ========== 1. 用 Zipf 分布生成视频的全局热度权重 ==========
+    # Zipf 参数 a=1.5: 头部集中但不至于太极端
+    # 先生成排名权重，然后随机打乱（不让 video_id 小的永远最热）
+    zipf_weights = 1.0 / np.arange(1, num_videos + 1) ** 1.5
+    zipf_weights = zipf_weights / zipf_weights.sum()  # 归一化为概率
+    # 随机打乱排名，避免 video_id 与热度强相关
+    shuffled_indices = np.random.permutation(num_videos)
+    video_popularity = np.zeros(num_videos)
+    for rank, vid in enumerate(shuffled_indices):
+        video_popularity[vid] = zipf_weights[rank]
+
+    # ========== 2. 建立标签/类目 → 视频ID的索引 ==========
     tag_to_videos = {}
     cat_to_videos = {}
     for v in videos:
@@ -192,8 +210,12 @@ def generate_behaviors(users, videos, progress_callback=None):
             cat_to_videos[cat] = []
         cat_to_videos[cat].append(v["video_id"])
 
-    all_video_ids = list(range(len(videos)))
-    total_users = len(users)
+    # ========== 3. 用 Zipf 分布决定每个用户的活跃度 ==========
+    # 参数 a=1.3: 少数活跃用户看 300+ 视频，多数用户只看 20-50
+    raw_activity = np.random.zipf(a=1.3, size=total_users)
+    # 裁剪到合理范围: 最少 20, 最多 500
+    user_watch_counts = np.clip(raw_activity, 20, 500).astype(int)
+
     behaviors = []
     headers = ["user_id", "video_id", "action_type", "timestamp", "watch_duration"]
 
@@ -202,10 +224,9 @@ def generate_behaviors(users, videos, progress_callback=None):
         pref_tags = user["preference_tags"]
         pref_cats = user["preference_categories"]
 
-        # 每用户观看 50-200 个视频
-        watch_count = random.randint(50, 200)
+        watch_count = int(user_watch_counts[idx])
 
-        # 70% 来自偏好标签/类目的视频
+        # ---- 偏好视频池（70%来源）----
         pref_video_pool = set()
         for tag in pref_tags:
             pref_video_pool.update(tag_to_videos.get(tag, []))
@@ -218,30 +239,49 @@ def generate_behaviors(users, videos, progress_callback=None):
 
         watched_videos = set()
 
-        # 偏好视频
+        # ---- 偏好池内: 按 Zipf 加权抽样（池内也有热门/冷门之分）----
         if pref_list and pref_watch > 0:
-            selected = random.sample(pref_list, min(pref_watch, len(pref_list)))
-            watched_videos.update(selected)
+            pref_weights = video_popularity[pref_list]
+            pref_probs = pref_weights / pref_weights.sum()
+            n_sample = min(pref_watch, len(pref_list))
+            selected = np.random.choice(
+                pref_list, size=n_sample, replace=False, p=pref_probs
+            )
+            watched_videos.update(selected.tolist())
 
-        # 随机探索
+        # ---- 随机探索: 按全局 Zipf 热度加权抽样 ----
         if random_watch > 0:
-            random_pool = [v for v in all_video_ids if v not in watched_videos]
-            if random_pool:
-                selected = random.sample(random_pool, min(random_watch, len(random_pool)))
-                watched_videos.update(selected)
+            # 将已看过的视频权重置零
+            explore_weights = video_popularity.copy()
+            for vid in watched_videos:
+                explore_weights[vid] = 0
+            total_w = explore_weights.sum()
+            if total_w > 0:
+                explore_probs = explore_weights / total_w
+                n_sample = min(random_watch, int((explore_weights > 0).sum()))
+                if n_sample > 0:
+                    selected = np.random.choice(
+                        num_videos, size=n_sample, replace=False, p=explore_probs
+                    )
+                    watched_videos.update(selected.tolist())
 
-        # 生成行为记录
+        # ---- 生成行为记录（行为类型与观看深度关联）----
         for vid in watched_videos:
             video_dur = videos[vid]["duration"]
-            # 有些视频看完，有些只看一部分
-            watch_dur = random.randint(max(5, video_dur // 4), video_dur)
+            # Zipf 热门视频倾向被看更久
+            popularity_factor = min(video_popularity[vid] / zipf_weights.mean(), 3.0)
+            min_dur = max(5, int(video_dur * 0.1))
+            max_dur = video_dur
+            # 热门视频的最低观看时长更高
+            min_dur = max(min_dur, int(video_dur * 0.2 * popularity_factor))
+            watch_dur = random.randint(min(min_dur, max_dur), max_dur)
 
+            # 观看比例越高 → 点赞/收藏概率越大
+            watch_ratio = watch_dur / max(video_dur, 1)
             action = "watch"
-            # 20% 概率点赞
-            if random.random() < 0.2:
+            if random.random() < 0.25 * watch_ratio:  # 看完全程 → 25% 点赞
                 action = "like"
-            # 10% 概率收藏
-            elif random.random() < 0.1:
+            elif random.random() < 0.12 * watch_ratio:  # 看完全程 → 12% 收藏
                 action = "favorite"
 
             ts = _random_timestamp(days_back=180)
