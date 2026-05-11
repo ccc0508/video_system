@@ -24,7 +24,7 @@ class OverviewPage(QWidget):
         title.setStyleSheet("color: #2c3e50; margin-bottom: 10px;")
         layout.addWidget(title)
 
-        subtitle = QLabel("短视频推荐系统 — 数据结构课程大作业")
+        subtitle = QLabel("短视频推荐系统")
         subtitle.setFont(QFont("Microsoft YaHei", 12))
         subtitle.setStyleSheet("color: #7f8c8d; margin-bottom: 20px;")
         layout.addWidget(subtitle)

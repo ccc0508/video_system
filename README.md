@@ -1,0 +1,78 @@
+# 短视频推荐系统
+
+一个基于 `PyQt5` 的短视频推荐与行为分析桌面系统。项目围绕视频库管理、用户行为模拟、相似用户推荐、热度预测和聚类分析展开，重点展示常见数据结构在推荐系统中的落地方式。
+
+## 核心功能
+
+- `F1` 视频信息库：按 ID、类目、标签和标题检索视频，查看热度排行与详情统计。
+- `F2` 用户数据：浏览用户列表、偏好标签和行为记录。
+- `F3` 相似用户分析：基于用户-视频稀疏矩阵与余弦相似度计算 Top-K 相似用户。
+- `F4` 视频推荐：基于 User-Based CF 汇总候选视频并输出 Top-N 推荐结果。
+- `F5` 热度预测：基于历史观看序列做滑动平均和线性回归外推。
+- `F6` 视频聚类：使用 K-Means 对视频按观看分布进行聚类。
+- `F7` 用户聚类：使用 K-Means 对用户按行为特征进行聚类。
+- 数据生成：自动生成模拟视频、用户和行为数据，便于演示和实验。
+
+## 技术栈
+
+- Python 3.10+
+- PyQt5
+- NumPy
+- Matplotlib
+
+## 核心数据结构
+
+- `HashMap`：视频和用户索引
+- `InvertedIndex`：类目、标签检索
+- `Heap`：Top-K / Top-N 排序
+- `SparseMatrix`：用户-视频交互矩阵
+- `Graph`：相似关系建模与连通分析
+
+## 项目示意
+
+![系统架构](results/system_architecture.png)
+![数据生成与存储](results/data_generation_storage.png)
+![推荐流程](results/recommendation_flow.png)
+![热度预测流程](results/heat_prediction_flow.png)
+![聚类流程](results/clustering_flow.png)
+
+## 快速开始
+
+1. 安装依赖
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. 启动程序
+
+   ```bash
+   python main.py
+   ```
+
+3. 首次运行时，先在“数据管理”菜单里生成模拟数据；程序也会在启动后自动尝试加载 `data/` 下已有数据。
+
+## 数据文件
+
+- `data/videos.json`
+- `data/users.json`
+- `data/behaviors.csv`
+- `results/`：保存架构图、流程图和其他展示资源
+
+## 目录结构
+
+```text
+.
+├── core/              # 推荐、预测、聚类等算法
+├── data/              # 生成或加载的数据文件
+├── data_structures/   # 自实现数据结构
+├── gui/               # PyQt5 界面与功能页
+├── results/           # 文档/展示图片
+├── storage/           # 数据读写工具
+├── main.py            # 程序入口
+└── requirements.txt   # 依赖列表
+```
+
+## 说明
+
+这是一个面向课程设计演示的桌面项目，界面与算法模块都保留了清晰的功能分层，方便继续扩展新的推荐策略或数据分析页面。
