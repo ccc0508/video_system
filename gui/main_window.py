@@ -463,8 +463,7 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "关于",
-            "短视频推荐系统 v1.0\n\n"
-            "数据结构课程大作业\n\n"
+            "短视频推荐系统\n\n"
             "功能:\n"
             "F1. 视频信息库构建 (10万+)\n"
             "F2. 用户行为模拟 (1万+)\n"
