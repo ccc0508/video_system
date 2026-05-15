@@ -25,18 +25,19 @@ class ClusterWorker(QThread):
     finished = pyqtSignal(list, list, list)
     error = pyqtSignal(str)
 
-    def __init__(self, engine, videos, behaviors, num_users, k):
+    def __init__(self, engine, videos, behaviors, users, k):
         super().__init__()
         self.engine = engine
         self.videos = videos
         self.behaviors = behaviors
-        self.num_users = num_users
+        self.users = users
         self.k = k
 
     def run(self):
         try:
+            self.engine._users_for_video_features = self.users
             features = self.engine.build_video_features(
-                self.videos, self.behaviors, self.num_users,
+                self.videos, self.behaviors, len(self.users),
                 progress_callback=lambda c, t: self.progress.emit(c, t)
             )
             labels, centers = self.engine.kmeans(features, self.k, max_iter=30)
@@ -147,7 +148,7 @@ class VClusterPage(QWidget):
 
         self.worker = ClusterWorker(
             self.engine, self.mw.videos, self.mw.behaviors,
-            len(self.mw.users), k
+            self.mw.users, k
         )
         self.worker.progress.connect(
             lambda c, t: self.status_label.setText(f"构建特征... {c}/{t}")

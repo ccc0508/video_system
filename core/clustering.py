@@ -26,7 +26,7 @@ class ClusteringEngine:
         """
         构建视频特征向量
 
-        每个视频的特征 = 各分类标签的观看用户比例（降维到分类维度）。
+        每个视频的特征 = 观看用户偏好分布 + 视频内容类目/标签 + 热度特征。
 
         Args:
             videos: 视频列表
@@ -41,38 +41,80 @@ class ClusteringEngine:
 
         num_videos = len(videos)
         num_categories = len(CATEGORY_LIST)
+        tag_dim = 32
         cat_index = {cat: i for i, cat in enumerate(CATEGORY_LIST)}
+        users_by_id = {}
+        for user in getattr(self, "_users_for_video_features", []):
+            users_by_id[int(user.get("user_id", 0))] = user
 
-        # 统计每个视频的观看用户所偏好的类目分布
+        # 统计每个视频的观看用户偏好分布和热度
         video_user_cats = defaultdict(lambda: defaultdict(int))
+        video_watch_counts = defaultdict(int)
+        video_like_counts = defaultdict(int)
+        video_fav_counts = defaultdict(int)
 
         total = len(behaviors)
         for i, b in enumerate(behaviors):
             vid = int(b[1])
             uid = int(b[0])
             if 0 <= vid < num_videos:
-                cat = videos[vid].get("category", "")
-                if cat in cat_index:
-                    video_user_cats[vid][cat_index[cat]] += 1
+                video_watch_counts[vid] += 1
+                action = b[2]
+                if action == "like":
+                    video_like_counts[vid] += 1
+                elif action == "favorite":
+                    video_fav_counts[vid] += 1
+
+                user = users_by_id.get(uid)
+                if user:
+                    pref_cats = user.get("preference_categories", [])
+                    for cat in pref_cats:
+                        if cat in cat_index:
+                            video_user_cats[vid][cat_index[cat]] += 1
+                else:
+                    cat = videos[vid].get("category", "")
+                    if cat in cat_index:
+                        video_user_cats[vid][cat_index[cat]] += 1
 
             if progress_callback and (i + 1) % 50000 == 0:
                 progress_callback(i + 1, total)
 
         # 归一化为特征向量
         features = []
+        max_watch = max(video_watch_counts.values()) if video_watch_counts else 1
         for vid in range(num_videos):
-            vec = [0.0] * num_categories
+            vec = [0.0] * (num_categories * 2 + tag_dim + 3)
             cat_counts = video_user_cats.get(vid, {})
             total_count = sum(cat_counts.values())
             if total_count > 0:
                 for cat_idx, count in cat_counts.items():
                     vec[cat_idx] = count / total_count
+
+            video = videos[vid]
+            own_cat = video.get("category", "")
+            if own_cat in cat_index:
+                vec[num_categories + cat_index[own_cat]] = 1.0
+
+            tag_offset = num_categories * 2
+            tags = video.get("tags", [])
+            if tags:
+                tag_weight = 1.0 / len(tags)
+                for tag in tags:
+                    slot = self._stable_hash(tag) % tag_dim
+                    vec[tag_offset + slot] += tag_weight
+
+            stats_offset = tag_offset + tag_dim
+            watches = video_watch_counts.get(vid, 0)
+            vec[stats_offset] = math.log1p(watches) / math.log1p(max_watch)
+            vec[stats_offset + 1] = video_like_counts.get(vid, 0) / max(watches, 1)
+            vec[stats_offset + 2] = video_fav_counts.get(vid, 0) / max(watches, 1)
             features.append(vec)
 
         if progress_callback:
             progress_callback(total, total)
 
         self.features = features
+        self._video_feature_categories = [v.get("category", "") for v in videos]
         return features
 
     def build_user_features(self, users, behaviors, videos, progress_callback=None):
@@ -124,6 +166,7 @@ class ClusteringEngine:
             progress_callback(total, total)
 
         self.features = features
+        self._video_feature_categories = None
         return features
 
     def kmeans(self, features, k=5, max_iter=50, progress_callback=None):
@@ -148,26 +191,34 @@ class ClusteringEngine:
 
         k = min(k, n)
 
-        # 初始化：随机选 K 个点作为中心
-        indices = random.sample(range(n), k)
-        centers = [features[i][:] for i in indices]
+        feature_categories = getattr(self, "_video_feature_categories", None)
+        if feature_categories and len(feature_categories) == n:
+            centers = self._init_centers_by_category(features, feature_categories, k)
+        else:
+            # 初始化：用最远点优先选择中心，避免随机中心都落在同一大类附近。
+            indices = self._init_centers_farthest_first(features, k)
+            centers = [features[i][:] for i in indices]
 
         labels = [0] * n
 
         for iteration in range(max_iter):
             # Step 1: 分配每个点到最近的中心
             changed = False
+            assigned_counts = [0] * k
             for i in range(n):
                 min_dist = float('inf')
                 min_label = 0
                 for j in range(k):
                     dist = self._euclidean_dist(features[i], centers[j])
-                    if dist < min_dist:
+                    if dist < min_dist - 1e-12:
                         min_dist = dist
+                        min_label = j
+                    elif abs(dist - min_dist) <= 1e-12 and assigned_counts[j] < assigned_counts[min_label]:
                         min_label = j
                 if labels[i] != min_label:
                     labels[i] = min_label
                     changed = True
+                assigned_counts[min_label] += 1
 
             if progress_callback:
                 progress_callback(iteration + 1, max_iter)
@@ -253,3 +304,68 @@ class ClusteringEngine:
     def _euclidean_dist(a, b):
         """欧氏距离"""
         return math.sqrt(sum((ai - bi) ** 2 for ai, bi in zip(a, b)))
+
+    def _init_centers_farthest_first(self, features, k):
+        """选择彼此距离更远的初始中心，降低单个大簇吞并多数样本的概率。"""
+        n = len(features)
+        first = random.randint(0, n - 1)
+        centers = [first]
+        min_dists = [self._euclidean_dist(vec, features[first]) for vec in features]
+
+        while len(centers) < k:
+            next_idx = max(range(n), key=lambda idx: min_dists[idx])
+            if min_dists[next_idx] == 0:
+                remaining = [idx for idx in range(n) if idx not in centers]
+                if not remaining:
+                    break
+                next_idx = random.choice(remaining)
+            centers.append(next_idx)
+            for idx, vec in enumerate(features):
+                dist = self._euclidean_dist(vec, features[next_idx])
+                if dist < min_dists[idx]:
+                    min_dists[idx] = dist
+
+        while len(centers) < k:
+            candidate = random.randint(0, n - 1)
+            if candidate not in centers:
+                centers.append(candidate)
+        return centers
+
+    def _init_centers_by_category(self, features, categories, k):
+        """按视频类目分层初始化中心，避免未选中类目全部贴到同一个随机中心。"""
+        category_counts = defaultdict(int)
+        for cat in categories:
+            category_counts[cat] += 1
+
+        buckets = [[] for _ in range(k)]
+        bucket_sizes = [0] * k
+        for cat, count in sorted(category_counts.items(), key=lambda item: -item[1]):
+            bucket = min(range(k), key=lambda idx: bucket_sizes[idx])
+            buckets[bucket].append(cat)
+            bucket_sizes[bucket] += count
+
+        dim = len(features[0]) if features else 0
+        centers = []
+        for bucket_cats in buckets:
+            indexes = [
+                idx for idx, cat in enumerate(categories)
+                if cat in bucket_cats
+            ]
+            if not indexes:
+                indexes = [random.randint(0, len(features) - 1)]
+
+            center = [0.0] * dim
+            for idx in indexes:
+                for d, value in enumerate(features[idx]):
+                    center[d] += value
+            centers.append([value / len(indexes) for value in center])
+
+        return centers
+
+    @staticmethod
+    def _stable_hash(text):
+        """稳定字符串哈希，避免 Python 进程级 hash 随机盐影响聚类结果。"""
+        value = 0
+        for ch in str(text):
+            value = (value * 131 + ord(ch)) & 0xFFFFFFFF
+        return value
