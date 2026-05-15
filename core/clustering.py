@@ -121,7 +121,7 @@ class ClusteringEngine:
         """
         构建用户特征向量
 
-        每个用户的特征 = 观看视频的类目分布比例。
+        每个用户的特征 = 观看类目分布 + 显式偏好类目/标签 + 活跃和互动特征。
 
         Args:
             users: 用户列表
@@ -136,15 +136,31 @@ class ClusteringEngine:
 
         num_users = len(users)
         num_categories = len(CATEGORY_LIST)
+        tag_dim = 32
         cat_index = {cat: i for i, cat in enumerate(CATEGORY_LIST)}
 
         user_cat_counts = defaultdict(lambda: defaultdict(int))
+        user_watch_counts = defaultdict(int)
+        user_like_counts = defaultdict(int)
+        user_fav_counts = defaultdict(int)
+        user_watch_seconds = defaultdict(int)
 
         total = len(behaviors)
         for i, b in enumerate(behaviors):
             uid = int(b[0])
             vid = int(b[1])
             if 0 <= vid < len(videos):
+                user_watch_counts[uid] += 1
+                action = b[2]
+                if action == "like":
+                    user_like_counts[uid] += 1
+                elif action == "favorite":
+                    user_fav_counts[uid] += 1
+                try:
+                    user_watch_seconds[uid] += int(b[4])
+                except (ValueError, TypeError):
+                    pass
+
                 cat = videos[vid].get("category", "")
                 if cat in cat_index:
                     user_cat_counts[uid][cat_index[cat]] += 1
@@ -153,13 +169,37 @@ class ClusteringEngine:
                 progress_callback(i + 1, total)
 
         features = []
+        max_watch = max(user_watch_counts.values()) if user_watch_counts else 1
         for uid in range(num_users):
-            vec = [0.0] * num_categories
+            vec = [0.0] * (num_categories * 2 + tag_dim + 4)
             cat_counts = user_cat_counts.get(uid, {})
             total_count = sum(cat_counts.values())
             if total_count > 0:
                 for cat_idx, count in cat_counts.items():
                     vec[cat_idx] = count / total_count
+
+            user = users[uid] if uid < len(users) else {}
+            pref_cats = user.get("preference_categories", [])
+            if pref_cats:
+                weight = 1.0 / len(pref_cats)
+                for cat in pref_cats:
+                    if cat in cat_index:
+                        vec[num_categories + cat_index[cat]] += weight
+
+            tag_offset = num_categories * 2
+            pref_tags = user.get("preference_tags", [])
+            if pref_tags:
+                tag_weight = 1.0 / len(pref_tags)
+                for tag in pref_tags:
+                    slot = self._stable_hash(tag) % tag_dim
+                    vec[tag_offset + slot] += tag_weight
+
+            stats_offset = tag_offset + tag_dim
+            watches = user_watch_counts.get(uid, 0)
+            vec[stats_offset] = math.log1p(watches) / math.log1p(max_watch)
+            vec[stats_offset + 1] = user_like_counts.get(uid, 0) / max(watches, 1)
+            vec[stats_offset + 2] = user_fav_counts.get(uid, 0) / max(watches, 1)
+            vec[stats_offset + 3] = user_watch_seconds.get(uid, 0) / max(watches, 1) / 600
             features.append(vec)
 
         if progress_callback:
@@ -167,6 +207,10 @@ class ClusteringEngine:
 
         self.features = features
         self._video_feature_categories = None
+        self._user_feature_categories = [
+            "|".join(sorted(user.get("preference_categories") or [""]))
+            for user in users
+        ]
         return features
 
     def kmeans(self, features, k=5, max_iter=50, progress_callback=None):
@@ -192,8 +236,12 @@ class ClusteringEngine:
         k = min(k, n)
 
         feature_categories = getattr(self, "_video_feature_categories", None)
+        balance_limit = None
         if feature_categories and len(feature_categories) == n:
             centers = self._init_centers_by_category(features, feature_categories, k)
+        elif getattr(self, "_user_feature_categories", None) and len(self._user_feature_categories) == n:
+            centers = self._init_centers_by_category(features, self._user_feature_categories, k)
+            balance_limit = math.ceil(n / k * 1.25)
         else:
             # 初始化：用最远点优先选择中心，避免随机中心都落在同一大类附近。
             indices = self._init_centers_farthest_first(features, k)
@@ -206,15 +254,20 @@ class ClusteringEngine:
             changed = False
             assigned_counts = [0] * k
             for i in range(n):
-                min_dist = float('inf')
-                min_label = 0
-                for j in range(k):
-                    dist = self._euclidean_dist(features[i], centers[j])
-                    if dist < min_dist - 1e-12:
-                        min_dist = dist
-                        min_label = j
-                    elif abs(dist - min_dist) <= 1e-12 and assigned_counts[j] < assigned_counts[min_label]:
-                        min_label = j
+                distances = [
+                    (self._euclidean_dist(features[i], centers[j]), j)
+                    for j in range(k)
+                ]
+                distances.sort(key=lambda item: item[0])
+                min_dist, min_label = distances[0]
+                for dist, candidate in distances:
+                    if balance_limit is not None and assigned_counts[candidate] >= balance_limit:
+                        continue
+                    if abs(dist - min_dist) <= 1e-12 and assigned_counts[candidate] < assigned_counts[min_label]:
+                        min_label = candidate
+                    else:
+                        min_label = candidate
+                    break
                 if labels[i] != min_label:
                     labels[i] = min_label
                     changed = True
