@@ -284,7 +284,8 @@ def generate_behaviors(users, videos, progress_callback=None):
             elif random.random() < 0.12 * watch_ratio:  # 看完全程 → 12% 收藏
                 action = "favorite"
 
-            ts = _random_timestamp(days_back=180)
+            # 行为时间集中在最近30天，给热度预测保留连续、密集的历史窗口。
+            ts = _random_timestamp(days_back=30)
             behaviors.append([user_id, vid, action, ts, watch_dur])
 
         if progress_callback and (idx + 1) % 500 == 0:
