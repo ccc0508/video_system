@@ -26,7 +26,7 @@ class ClusteringEngine:
         """
         构建视频特征向量
 
-        每个视频的特征 = 观看用户偏好分布 + 视频内容类目/标签 + 热度特征。
+        每个视频的特征 = 实际观看用户集合的压缩向量 + 轻量热度特征。
 
         Args:
             videos: 视频列表
@@ -37,18 +37,12 @@ class ClusteringEngine:
         Returns:
             features: [[f1, f2, ...], ...] 每行一个视频
         """
-        from core.data_generator import CATEGORY_LIST
-
         num_videos = len(videos)
-        num_categories = len(CATEGORY_LIST)
-        tag_dim = 32
-        cat_index = {cat: i for i, cat in enumerate(CATEGORY_LIST)}
-        users_by_id = {}
-        for user in getattr(self, "_users_for_video_features", []):
-            users_by_id[int(user.get("user_id", 0))] = user
+        user_dim = min(256, max(32, num_users or 32))
 
-        # 统计每个视频的观看用户偏好分布和热度
-        video_user_cats = defaultdict(lambda: defaultdict(int))
+        # 统计每个视频的真实观看用户集合。用 user_id 哈希桶压缩高维用户向量，
+        # 避免 10 万视频 × 1 万用户的完整矩阵占用过多内存。
+        video_unique_users = defaultdict(set)
         video_watch_counts = defaultdict(int)
         video_like_counts = defaultdict(int)
         video_fav_counts = defaultdict(int)
@@ -59,22 +53,13 @@ class ClusteringEngine:
             uid = int(b[0])
             if 0 <= vid < num_videos:
                 video_watch_counts[vid] += 1
+                video_unique_users[vid].add(uid)
+
                 action = b[2]
                 if action == "like":
                     video_like_counts[vid] += 1
                 elif action == "favorite":
                     video_fav_counts[vid] += 1
-
-                user = users_by_id.get(uid)
-                if user:
-                    pref_cats = user.get("preference_categories", [])
-                    for cat in pref_cats:
-                        if cat in cat_index:
-                            video_user_cats[vid][cat_index[cat]] += 1
-                else:
-                    cat = videos[vid].get("category", "")
-                    if cat in cat_index:
-                        video_user_cats[vid][cat_index[cat]] += 1
 
             if progress_callback and (i + 1) % 50000 == 0:
                 progress_callback(i + 1, total)
@@ -83,38 +68,29 @@ class ClusteringEngine:
         features = []
         max_watch = max(video_watch_counts.values()) if video_watch_counts else 1
         for vid in range(num_videos):
-            vec = [0.0] * (num_categories * 2 + tag_dim + 3)
-            cat_counts = video_user_cats.get(vid, {})
-            total_count = sum(cat_counts.values())
-            if total_count > 0:
-                for cat_idx, count in cat_counts.items():
-                    vec[cat_idx] = count / total_count
+            vec = [0.0] * (user_dim + 4)
+            buckets = defaultdict(float)
+            for uid in video_unique_users.get(vid, set()):
+                bucket = self._stable_hash(uid) % user_dim
+                buckets[bucket] += 1.0
+            norm = math.sqrt(sum(value * value for value in buckets.values()))
+            if norm > 0:
+                for bucket, value in buckets.items():
+                    vec[bucket] = value / norm
 
-            video = videos[vid]
-            own_cat = video.get("category", "")
-            if own_cat in cat_index:
-                vec[num_categories + cat_index[own_cat]] = 1.0
-
-            tag_offset = num_categories * 2
-            tags = video.get("tags", [])
-            if tags:
-                tag_weight = 1.0 / len(tags)
-                for tag in tags:
-                    slot = self._stable_hash(tag) % tag_dim
-                    vec[tag_offset + slot] += tag_weight
-
-            stats_offset = tag_offset + tag_dim
+            stats_offset = user_dim
             watches = video_watch_counts.get(vid, 0)
             vec[stats_offset] = math.log1p(watches) / math.log1p(max_watch)
             vec[stats_offset + 1] = video_like_counts.get(vid, 0) / max(watches, 1)
             vec[stats_offset + 2] = video_fav_counts.get(vid, 0) / max(watches, 1)
+            vec[stats_offset + 3] = len(video_unique_users.get(vid, set())) / max(num_users, 1)
             features.append(vec)
 
         if progress_callback:
             progress_callback(total, total)
 
         self.features = features
-        self._video_feature_categories = [v.get("category", "") for v in videos]
+        self._video_feature_categories = None
         return features
 
     def build_user_features(self, users, behaviors, videos, progress_callback=None):

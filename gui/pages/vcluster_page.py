@@ -35,7 +35,6 @@ class ClusterWorker(QThread):
 
     def run(self):
         try:
-            self.engine._users_for_video_features = self.users
             features = self.engine.build_video_features(
                 self.videos, self.behaviors, len(self.users),
                 progress_callback=lambda c, t: self.progress.emit(c, t)
@@ -63,7 +62,7 @@ class VClusterPage(QWidget):
         title.setStyleSheet("color: #2c3e50;")
         layout.addWidget(title)
 
-        desc = QLabel("基于观看用户分布构建视频特征向量，使用 K-Means 聚类将相似视频分组。")
+        desc = QLabel("基于实际观看用户集合构建视频特征向量，使用 K-Means 将受众相似的视频聚成一组。")
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 10px;")
         desc.setWordWrap(True)
         layout.addWidget(desc)

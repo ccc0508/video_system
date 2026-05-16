@@ -84,4 +84,27 @@ recs = Recommender(engine).recommend(0, similar, top_n=2, videos=[{} for _ in ra
 assert recs and recs[0]["video_id"] == 2
 print("✓ Similarity/Recommender integration OK")
 
+# Test video clustering feature semantics
+from core.clustering import ClusteringEngine
+
+videos = [
+    {"video_id": 0, "category": "游戏", "tags": ["a"]},
+    {"video_id": 1, "category": "音乐", "tags": ["b"]},
+    {"video_id": 2, "category": "游戏", "tags": ["a"]},
+]
+cluster_behaviors = [
+    [0, 0, "watch", 0, 10],
+    [1, 0, "watch", 0, 10],
+    [0, 1, "watch", 0, 10],
+    [1, 1, "watch", 0, 10],
+    [4, 2, "watch", 0, 10],
+    [5, 2, "watch", 0, 10],
+]
+cluster_engine = ClusteringEngine()
+features = cluster_engine.build_video_features(videos, cluster_behaviors, num_users=6)
+dist_same_audience = cluster_engine._euclidean_dist(features[0], features[1])
+dist_same_content = cluster_engine._euclidean_dist(features[0], features[2])
+assert dist_same_audience < dist_same_content
+print("✓ Video clustering uses watched-user similarity OK")
+
 print("\n全部数据结构测试通过！")
