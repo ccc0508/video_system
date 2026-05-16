@@ -5,6 +5,7 @@
 用于: F4 视频推荐。
 """
 from data_structures.heap import MinHeap
+from data_structures.hash_map import HashMap
 
 
 class Recommender:
@@ -40,19 +41,20 @@ class Recommender:
         target_watched = self.sim_engine.get_user_watched(target_uid)
 
         # 候选视频得分表
-        candidate_scores = {}  # {video_id: total_score}
-        candidate_sources = {}  # {video_id: [(uid, sim)]}
+        candidate_scores = HashMap()  # HashMap<video_id, total_score>
+        candidate_sources = HashMap()  # HashMap<video_id, [(uid, sim)]>
 
         for neighbor_uid, sim_score in similar_users:
             neighbor_watched = self.sim_engine.get_user_watched(neighbor_uid)
             # 找出邻居看过但目标用户没看过的视频
             new_videos = neighbor_watched - target_watched
             for vid in new_videos:
-                if vid not in candidate_scores:
-                    candidate_scores[vid] = 0.0
-                    candidate_sources[vid] = []
-                candidate_scores[vid] += sim_score
-                candidate_sources[vid].append((neighbor_uid, sim_score))
+                score = candidate_scores.get(vid)
+                if score is None:
+                    score = 0.0
+                    candidate_sources.put(vid, [])
+                candidate_scores.put(vid, score + sim_score)
+                candidate_sources.get(vid).append((neighbor_uid, sim_score))
 
         if not candidate_scores:
             return []
@@ -67,7 +69,7 @@ class Recommender:
 
         results = []
         for score, vid in sorted_items:
-            sources = candidate_sources[vid]
+            sources = candidate_sources.get(vid, [])
             reason = f"有{len(sources)}位兴趣相似的用户也在看"
 
             item = {

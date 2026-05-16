@@ -22,11 +22,11 @@
 
 ## 核心数据结构
 
-- `HashMap`：视频和用户索引
+- `HashMap`：视频/用户主索引、倒排索引底层映射、推荐候选得分表
 - `InvertedIndex`：类目、标签检索
-- `Heap`：Top-K / Top-N 排序
+- `Heap`：Top-K / Top-N 选择
 - `SparseMatrix`：用户-视频交互矩阵
-- `Graph`：相似关系建模与连通分析
+- `Graph`：相似用户关系建模与连通分析
 
 ## 项目示意
 

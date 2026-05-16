@@ -22,6 +22,7 @@ from gui.pages.vcluster_page import VClusterPage
 from gui.pages.ucluster_page import UClusterPage
 
 from storage.file_manager import load_json, load_csv_all, data_file_exists, DATA_DIR, RESULTS_DIR
+from data_structures.hash_map import HashMap
 import os, shutil
 
 
@@ -98,6 +99,8 @@ class MainWindow(QMainWindow):
         self.videos = []
         self.users = []
         self.behaviors = []
+        self.video_index = HashMap()
+        self.user_index = HashMap()
 
         self._setup_ui()
         self._setup_menu()
@@ -381,6 +384,8 @@ class MainWindow(QMainWindow):
             self.videos = []
             self.users = []
             self.behaviors = []
+            self.video_index = HashMap()
+            self.user_index = HashMap()
 
             # 刷新UI
             self.status_label.setText("数据已删除")
@@ -430,6 +435,7 @@ class MainWindow(QMainWindow):
         self.videos = data["videos"]
         self.users = data["users"]
         self.behaviors = data["behaviors"]
+        self._build_primary_indexes()
 
         self.status_label.setText("数据加载完成")
         self.data_label.setText(
@@ -459,6 +465,16 @@ class MainWindow(QMainWindow):
             f"👤 用户: {len(self.users):,} 个\n"
             f"📝 行为: {len(self.behaviors):,} 条"
         )
+
+    def _build_primary_indexes(self):
+        """构建视频/用户主索引，支撑 O(1) ID 查找。"""
+        self.video_index = HashMap(capacity=max(16, len(self.videos) * 2))
+        for video in self.videos:
+            self.video_index.put(int(video.get("video_id", 0)), video)
+
+        self.user_index = HashMap(capacity=max(16, len(self.users) * 2))
+        for user in self.users:
+            self.user_index.put(int(user.get("user_id", 0)), user)
 
     def _show_about(self):
         QMessageBox.about(

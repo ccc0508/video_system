@@ -59,7 +59,7 @@ class RecommendPage(QWidget):
         title.setStyleSheet("color: #2c3e50;")
         layout.addWidget(title)
 
-        desc = QLabel("基于用户的协同过滤(User-Based CF): 找到相似用户 → 汇总候选视频(哈希表) → 最大堆取 Top-N。")
+        desc = QLabel("基于用户的协同过滤(User-Based CF): 找到相似用户 → 汇总候选视频(HashMap) → 最小堆维护 Top-N。")
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 10px;")
         desc.setWordWrap(True)
         layout.addWidget(desc)

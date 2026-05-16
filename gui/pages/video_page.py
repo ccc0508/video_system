@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 
 from data_structures.inverted_index import InvertedIndex
-from data_structures.heap import MaxHeap
+from data_structures.heap import MinHeap
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -228,8 +228,9 @@ class VideoPage(QWidget):
         if search_type == "按视频ID":
             try:
                 vid = int(query)
-                if 0 <= vid < len(self.mw.videos):
-                    results = [self.mw.videos[vid]]
+                video = getattr(self.mw, "video_index", None).get(vid) if hasattr(self.mw, "video_index") else None
+                if video is not None:
+                    results = [video]
                 else:
                     QMessageBox.warning(self, "提示", f"视频ID {vid} 不存在！")
                     return
@@ -239,11 +240,13 @@ class VideoPage(QWidget):
 
         elif search_type == "按类目":
             ids = self.cat_index.search(query)
-            results = [self.mw.videos[i] for i in ids if i < len(self.mw.videos)]
+            results = [self._get_video_by_id(i) for i in ids]
+            results = [v for v in results if v is not None]
 
         elif search_type == "按标签":
             ids = self.tag_index.search(query)
-            results = [self.mw.videos[i] for i in ids if i < len(self.mw.videos)]
+            results = [self._get_video_by_id(i) for i in ids]
+            results = [v for v in results if v is not None]
 
         elif search_type == "按标题关键词":
             results = [v for v in self.mw.videos if query in v.get("title", "")]
@@ -256,6 +259,17 @@ class VideoPage(QWidget):
         results = self.mw.videos[:500]
         self._display_results(results)
         self.result_label.setText(f"共 {len(self.mw.videos):,} 条视频（显示前500条）")
+
+    def _get_video_by_id(self, vid):
+        """通过主索引按视频 ID 查找，兼容索引未构建的旧状态。"""
+        video_index = getattr(self.mw, "video_index", None)
+        if video_index is not None:
+            video = video_index.get(vid)
+            if video is not None:
+                return video
+        if 0 <= vid < len(self.mw.videos):
+            return self.mw.videos[vid]
+        return None
 
     def _display_results(self, results):
         import time
@@ -274,7 +288,7 @@ class VideoPage(QWidget):
     # ================== 热门排行榜 ==================
 
     def _refresh_ranking(self):
-        """使用最大堆取 Top-N 热门视频"""
+        """使用容量受限的最小堆取 Top-N 热门视频"""
         if not self._video_stats:
             QMessageBox.warning(self, "提示", "请先生成或加载数据！")
             return
@@ -282,8 +296,8 @@ class VideoPage(QWidget):
         sort_key = self.rank_sort.currentText()
         top_n = self.rank_count.value()
 
-        # 用最大堆高效取 Top-N
-        heap = MaxHeap()
+        # 维护容量为 N 的最小堆，避免对全部视频做完整排序。
+        heap = MinHeap(capacity=top_n)
         for vid, stats in self._video_stats.items():
             views = stats["views"]
             likes = stats["likes"]
@@ -300,12 +314,11 @@ class VideoPage(QWidget):
 
             heap.insert((score, vid))
 
-        # 提取 Top-N
-        ranking = []
-        for _ in range(min(top_n, len(heap))):
-            score, vid = heap.extract()
-            if vid < len(self.mw.videos):
-                ranking.append((vid, score))
+        ranking = [
+            (vid, score)
+            for score, vid in heap.to_sorted_list(reverse=True)
+            if self._get_video_by_id(vid) is not None
+        ]
 
         self._display_ranking(ranking, sort_key)
 
@@ -317,7 +330,9 @@ class VideoPage(QWidget):
         medal_colors = {0: "#FFD700", 1: "#C0C0C0", 2: "#CD7F32"}
 
         for row, (vid, score) in enumerate(ranking):
-            v = self.mw.videos[vid]
+            v = self._get_video_by_id(vid)
+            if v is None:
+                continue
             stats = self._video_stats.get(vid, {"views": 0, "likes": 0, "favorites": 0})
 
             rank_text = f"🥇 {row+1}" if row == 0 else f"🥈 {row+1}" if row == 1 else f"🥉 {row+1}" if row == 2 else str(row+1)
@@ -398,12 +413,12 @@ class VideoPage(QWidget):
         except ValueError:
             return
 
-        if vid < 0 or vid >= len(self.mw.videos):
+        v = self._get_video_by_id(vid)
+        if v is None:
             return
 
         import time as _time
 
-        v = self.mw.videos[vid]
         stats = self._video_stats.get(vid, {"views": 0, "likes": 0, "favorites": 0})
 
         # 更新标题

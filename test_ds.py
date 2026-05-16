@@ -24,12 +24,14 @@ print("✓ MinHeap Top-K OK")
 from data_structures.sparse_matrix import SparseMatrix
 sm = SparseMatrix(3, 5)
 sm.set(0, 1, 1)
+sm.set(0, 1, 1)
 sm.set(0, 3, 1)
 sm.set(1, 1, 1)
 sm.set(1, 2, 1)
 sm.set(2, 3, 1)
 sm.set(2, 4, 1)
 sm.build()
+assert sm.row_nnz(0) == 2
 sim01 = sm.cosine_similarity(0, 1)
 sim02 = sm.cosine_similarity(0, 2)
 print(f"✓ SparseMatrix OK (sim(0,1)={sim01:.4f}, sim(0,2)={sim02:.4f})")
@@ -43,16 +45,43 @@ idx.add("java", 2)
 idx.add("java", 3)
 assert idx.search("python") == {1, 2}
 assert idx.search_and(["python", "java"]) == {2}
+assert idx.term_count("java") == 2
 print("✓ InvertedIndex OK")
 
 # Test Graph
 from data_structures.graph import Graph
 g = Graph()
 g.add_edge("a", "b", 0.9)
+g.add_edge("a", "b", 0.95)
 g.add_edge("b", "c", 0.8)
 g.add_edge("d", "e", 0.7)
 comps = g.connected_components()
 assert len(comps) == 2
+assert g.num_edges == 3
 print("✓ Graph OK")
+
+# Test Similarity + Recommender integration
+from core.similarity import SimilarityEngine
+from core.recommender import Recommender
+
+users = [{"user_id": i, "name": f"u{i}"} for i in range(3)]
+behaviors = [
+    [0, 0, "view", 0, 10],
+    [0, 1, "view", 0, 10],
+    [0, 1, "like", 0, 10],  # duplicate user-video pair should not duplicate matrix columns
+    [1, 0, "view", 0, 10],
+    [1, 1, "view", 0, 10],
+    [1, 2, "view", 0, 10],
+    [2, 3, "view", 0, 10],
+]
+engine = SimilarityEngine()
+engine.build_matrix(users, behaviors)
+assert engine.matrix.row_nnz(0) == 2
+similar = engine.find_similar_users(0, top_k=2)
+assert similar and similar[0][0] == 1
+assert engine.similarity_graph.num_edges == 1
+recs = Recommender(engine).recommend(0, similar, top_n=2, videos=[{} for _ in range(4)])
+assert recs and recs[0]["video_id"] == 2
+print("✓ Similarity/Recommender integration OK")
 
 print("\n全部数据结构测试通过！")

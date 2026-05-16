@@ -6,6 +6,8 @@
 """
 from data_structures.sparse_matrix import SparseMatrix
 from data_structures.heap import MinHeap
+from data_structures.graph import Graph
+from data_structures.hash_map import HashMap
 
 
 class SimilarityEngine:
@@ -20,7 +22,8 @@ class SimilarityEngine:
         self.matrix = None       # 稀疏矩阵
         self.user_count = 0
         self.video_count = 0
-        self._user_watched = {}  # {user_id: set(video_ids)}
+        self._user_watched = HashMap()  # HashMap<user_id, set(video_ids)>
+        self.similarity_graph = Graph()  # 最近一次查询形成的相似用户网络
 
     def build_matrix(self, users, behaviors, progress_callback=None):
         """
@@ -41,7 +44,8 @@ class SimilarityEngine:
         self.video_count = max_vid + 1
 
         self.matrix = SparseMatrix(self.user_count, self.video_count)
-        self._user_watched = {}
+        self._user_watched = HashMap(capacity=max(16, self.user_count * 2))
+        self.similarity_graph = Graph()
 
         total = len(behaviors)
         for i, b in enumerate(behaviors):
@@ -50,9 +54,11 @@ class SimilarityEngine:
             # 简单设置为 1（观看过）
             self.matrix.set(uid, vid, 1)
 
-            if uid not in self._user_watched:
-                self._user_watched[uid] = set()
-            self._user_watched[uid].add(vid)
+            watched = self._user_watched.get(uid)
+            if watched is None:
+                watched = set()
+                self._user_watched.put(uid, watched)
+            watched.add(vid)
 
             if progress_callback and (i + 1) % 50000 == 0:
                 progress_callback(i + 1, total)
@@ -100,13 +106,25 @@ class SimilarityEngine:
         if progress_callback:
             progress_callback(self.user_count, self.user_count)
 
-        # 从堆中取出结果（降序）
+        # 从堆中取出结果（降序），并维护一次查询对应的用户相似图。
         result = heap.to_sorted_list(reverse=True)
-        return [(uid, score) for score, uid in result]
+        similar_users = [(uid, score) for score, uid in result]
+        self._update_similarity_graph(target_uid, similar_users)
+        return similar_users
 
     def get_user_watched(self, uid):
         """获取用户观看过的视频集合"""
         return self._user_watched.get(uid, set())
+
+    def _update_similarity_graph(self, target_uid, similar_users):
+        """将一次 Top-K 查询结果加入相似用户图，供网络/连通分析复用。"""
+        self.similarity_graph.add_node(target_uid)
+        for uid, score in similar_users:
+            self.similarity_graph.add_edge(target_uid, uid, score)
+
+    def get_similarity_components(self):
+        """返回当前相似用户图中的连通分量。"""
+        return self.similarity_graph.connected_components()
 
     def jaccard_similarity(self, uid1, uid2):
         """计算两个用户的 Jaccard 相似度"""

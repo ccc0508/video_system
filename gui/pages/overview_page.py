@@ -72,11 +72,11 @@ class OverviewPage(QWidget):
         ds_group = QGroupBox("核心数据结构")
         ds_layout = QGridLayout(ds_group)
         structures = [
-            "哈希表 (HashMap) — 视频/用户索引",
+            "哈希表 (HashMap) — 主索引/倒排索引/候选得分表",
             "堆 (Heap) — Top-K/Top-N 选择",
             "稀疏矩阵 (CSR) — 用户-视频交互",
             "倒排索引 — 标签/类目检索",
-            "图 (Graph) — 相似度网络",
+            "图 (Graph) — 相似用户网络",
             "时间序列数组 — 热度预测",
         ]
         for i, s in enumerate(structures):

@@ -59,7 +59,7 @@ class SimilarPage(QWidget):
         title.setStyleSheet("color: #2c3e50;")
         layout.addWidget(title)
 
-        desc = QLabel("基于协同过滤，使用余弦相似度和稀疏矩阵(CSR)计算用户间的兴趣相似程度，使用最小堆维护 Top-K 结果。")
+        desc = QLabel("基于协同过滤，使用余弦相似度和稀疏矩阵(CSR)计算用户间的兴趣相似程度，使用最小堆维护 Top-K 结果，并生成用户相似关系图。")
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 10px;")
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -167,7 +167,13 @@ class SimilarPage(QWidget):
 
     def _on_result(self, target_uid, results):
         self.analyze_btn.setEnabled(True)
-        self.result_label.setText(f"用户 {target_uid} 的 Top-{len(results)} 相似用户")
+        graph = self.sim_engine.similarity_graph
+        components = self.sim_engine.get_similarity_components()
+        self.result_label.setText(
+            f"用户 {target_uid} 的 Top-{len(results)} 相似用户 | "
+            f"相似图: {graph.num_nodes} 个节点、{graph.num_edges} 条边、"
+            f"{len(components)} 个连通分量"
+        )
 
         self.table.setRowCount(len(results))
         for i, (uid, score) in enumerate(results):

@@ -4,6 +4,7 @@
 将标签/类目映射到视频 ID 列表，支持单词条和多词条检索。
 用于: F1 视频搜索（按标签/类目快速检索）。
 """
+from data_structures.hash_map import HashMap
 
 
 class InvertedIndex:
@@ -16,13 +17,15 @@ class InvertedIndex:
     """
 
     def __init__(self):
-        self._index = {}  # {term: set(doc_ids)}
+        self._index = HashMap()  # HashMap<term, set(doc_ids)>
 
     def add(self, term, doc_id):
         """添加一条索引: 词条 → 文档 ID"""
-        if term not in self._index:
-            self._index[term] = set()
-        self._index[term].add(doc_id)
+        doc_ids = self._index.get(term)
+        if doc_ids is None:
+            doc_ids = set()
+            self._index.put(term, doc_ids)
+        doc_ids.add(doc_id)
 
     def add_many(self, terms, doc_id):
         """批量添加: 多个词条 → 同一文档 ID"""
@@ -51,14 +54,15 @@ class InvertedIndex:
 
     def remove(self, term, doc_id):
         """从索引中移除一条记录"""
-        if term in self._index:
-            self._index[term].discard(doc_id)
-            if not self._index[term]:
-                del self._index[term]
+        doc_ids = self._index.get(term)
+        if doc_ids is not None:
+            doc_ids.discard(doc_id)
+            if not doc_ids:
+                self._index.remove(term)
 
     def get_terms(self):
         """获取所有词条"""
-        return list(self._index.keys())
+        return self._index.keys()
 
     def term_count(self, term):
         """获取某词条的文档数量"""
