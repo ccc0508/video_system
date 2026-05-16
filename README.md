@@ -28,14 +28,6 @@
 - `SparseMatrix`：用户-视频交互矩阵
 - `Graph`：相似用户关系建模与连通分析
 
-## 项目示意
-
-![系统架构](results/system_architecture.png)
-![数据生成与存储](results/data_generation_storage.png)
-![推荐流程](results/recommendation_flow.png)
-![热度预测流程](results/heat_prediction_flow.png)
-![聚类流程](results/clustering_flow.png)
-
 ## 快速开始
 
 1. 安装依赖
