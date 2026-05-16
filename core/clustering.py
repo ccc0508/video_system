@@ -7,6 +7,8 @@ import random
 import math
 from collections import defaultdict
 
+import numpy as np
+
 
 class ClusteringEngine:
     """
@@ -64,11 +66,11 @@ class ClusteringEngine:
             if progress_callback and (i + 1) % 50000 == 0:
                 progress_callback(i + 1, total)
 
-        # 归一化为特征向量
-        features = []
+        # 归一化为特征矩阵
         max_watch = max(video_watch_counts.values()) if video_watch_counts else 1
+        features = np.zeros((num_videos, user_dim + 4), dtype=np.float32)
+        stats_offset = user_dim
         for vid in range(num_videos):
-            vec = [0.0] * (user_dim + 4)
             buckets = defaultdict(float)
             for uid in video_unique_users.get(vid, set()):
                 bucket = self._stable_hash(uid) % user_dim
@@ -76,22 +78,20 @@ class ClusteringEngine:
             norm = math.sqrt(sum(value * value for value in buckets.values()))
             if norm > 0:
                 for bucket, value in buckets.items():
-                    vec[bucket] = value / norm
+                    features[vid, bucket] = value / norm
 
-            stats_offset = user_dim
             watches = video_watch_counts.get(vid, 0)
-            vec[stats_offset] = math.log1p(watches) / math.log1p(max_watch)
-            vec[stats_offset + 1] = video_like_counts.get(vid, 0) / max(watches, 1)
-            vec[stats_offset + 2] = video_fav_counts.get(vid, 0) / max(watches, 1)
-            vec[stats_offset + 3] = len(video_unique_users.get(vid, set())) / max(num_users, 1)
-            features.append(vec)
+            features[vid, stats_offset] = math.log1p(watches) / math.log1p(max_watch)
+            features[vid, stats_offset + 1] = video_like_counts.get(vid, 0) / max(watches, 1)
+            features[vid, stats_offset + 2] = video_fav_counts.get(vid, 0) / max(watches, 1)
+            features[vid, stats_offset + 3] = len(video_unique_users.get(vid, set())) / max(num_users, 1)
 
         if progress_callback:
             progress_callback(total, total)
 
-        self.features = features
+        self.features = features.tolist()
         self._video_feature_categories = None
-        return features
+        return self.features
 
     def build_user_features(self, users, behaviors, videos, progress_callback=None):
         """
@@ -203,8 +203,9 @@ class ClusteringEngine:
             labels: 每个数据点的簇标签 [0, 2, 1, ...]
             centers: 聚类中心 [[f1, f2, ...], ...]
         """
-        n = len(features)
-        dim = len(features[0]) if features else 0
+        feature_array = np.asarray(features, dtype=np.float32)
+        n = int(feature_array.shape[0]) if feature_array.ndim == 2 else 0
+        dim = int(feature_array.shape[1]) if n else 0
 
         if n == 0 or dim == 0 or k <= 0:
             return [], []
@@ -214,73 +215,64 @@ class ClusteringEngine:
         feature_categories = getattr(self, "_video_feature_categories", None)
         balance_limit = None
         if feature_categories and len(feature_categories) == n:
-            centers = self._init_centers_by_category(features, feature_categories, k)
+            centers = self._init_centers_by_category(feature_array, feature_categories, k)
         elif getattr(self, "_user_feature_categories", None) and len(self._user_feature_categories) == n:
-            centers = self._init_centers_by_category(features, self._user_feature_categories, k)
+            centers = self._init_centers_by_category(feature_array, self._user_feature_categories, k)
             balance_limit = math.ceil(n / k * 1.25)
         else:
             # 初始化：用最远点优先选择中心，避免随机中心都落在同一大类附近。
-            indices = self._init_centers_farthest_first(features, k)
-            centers = [features[i][:] for i in indices]
+            indices = self._init_centers_farthest_first(feature_array, k)
+            centers = feature_array[indices].tolist()
 
-        labels = [0] * n
+        labels = np.zeros(n, dtype=np.int32)
+        balance_limit = int(balance_limit) if balance_limit is not None else None
 
         for iteration in range(max_iter):
             # Step 1: 分配每个点到最近的中心
-            changed = False
-            assigned_counts = [0] * k
-            for i in range(n):
-                distances = [
-                    (self._euclidean_dist(features[i], centers[j]), j)
-                    for j in range(k)
-                ]
-                distances.sort(key=lambda item: item[0])
-                min_dist, min_label = distances[0]
-                for dist, candidate in distances:
-                    if balance_limit is not None and assigned_counts[candidate] >= balance_limit:
-                        continue
-                    if abs(dist - min_dist) <= 1e-12 and assigned_counts[candidate] < assigned_counts[min_label]:
-                        min_label = candidate
-                    else:
-                        min_label = candidate
-                    break
-                if labels[i] != min_label:
-                    labels[i] = min_label
-                    changed = True
-                assigned_counts[min_label] += 1
+            center_array = np.asarray(centers, dtype=np.float32)
+            # squared_distances[i, j] 表示第 i 个样本到第 j 个中心的平方欧氏距离。
+            squared_distances = (
+                np.sum(feature_array * feature_array, axis=1, keepdims=True)
+                - 2.0 * feature_array @ center_array.T
+                + np.sum(center_array * center_array, axis=1)
+            )
+            np.maximum(squared_distances, 0.0, out=squared_distances)
+
+            if balance_limit is None:
+                new_labels = np.argmin(squared_distances, axis=1).astype(np.int32)
+            else:
+                new_labels = self._assign_with_balance(squared_distances, balance_limit)
+
+            changed = not np.array_equal(labels, new_labels)
+            labels = new_labels
 
             if progress_callback:
                 progress_callback(iteration + 1, max_iter)
 
             # Step 2: 更新中心
-            new_centers = [[0.0] * dim for _ in range(k)]
-            counts = [0] * k
-            for i in range(n):
-                cluster = labels[i]
-                counts[cluster] += 1
-                for d in range(dim):
-                    new_centers[cluster][d] += features[i][d]
+            new_centers = np.zeros((k, dim), dtype=np.float32)
+            np.add.at(new_centers, labels, feature_array)
+            counts = np.bincount(labels, minlength=k).astype(np.float32)
+            non_empty = counts > 0
+            new_centers[non_empty] /= counts[non_empty, None]
 
             for j in range(k):
-                if counts[j] > 0:
-                    for d in range(dim):
-                        new_centers[j][d] /= counts[j]
-                else:
+                if not non_empty[j]:
                     # 空簇：随机重新选一个点
-                    new_centers[j] = features[random.randint(0, n - 1)][:]
+                    new_centers[j] = feature_array[random.randint(0, n - 1)]
 
-            centers = new_centers
+            centers = new_centers.tolist()
 
             if not changed:
                 break
 
-        self.labels = labels
+        self.labels = labels.tolist()
         self.centers = centers
 
         if progress_callback:
             progress_callback(max_iter, max_iter)
 
-        return labels, centers
+        return self.labels, centers
 
     def get_cluster_info(self, labels, items, item_type="video"):
         """
@@ -334,25 +326,46 @@ class ClusteringEngine:
         """欧氏距离"""
         return math.sqrt(sum((ai - bi) ** 2 for ai, bi in zip(a, b)))
 
+    @staticmethod
+    def _assign_with_balance(squared_distances, balance_limit):
+        """在保持最近中心优先的基础上限制单个簇过大。"""
+        n, k = squared_distances.shape
+        labels = np.zeros(n, dtype=np.int32)
+        assigned_counts = np.zeros(k, dtype=np.int32)
+        ordered_clusters = np.argsort(squared_distances, axis=1)
+
+        for i in range(n):
+            chosen = int(ordered_clusters[i, 0])
+            for candidate in ordered_clusters[i]:
+                candidate = int(candidate)
+                if assigned_counts[candidate] < balance_limit:
+                    chosen = candidate
+                    break
+            labels[i] = chosen
+            assigned_counts[chosen] += 1
+
+        return labels
+
     def _init_centers_farthest_first(self, features, k):
         """选择彼此距离更远的初始中心，降低单个大簇吞并多数样本的概率。"""
-        n = len(features)
+        feature_array = np.asarray(features, dtype=np.float32)
+        n = int(feature_array.shape[0])
         first = random.randint(0, n - 1)
         centers = [first]
-        min_dists = [self._euclidean_dist(vec, features[first]) for vec in features]
+        diff = feature_array - feature_array[first]
+        min_dists = np.sum(diff * diff, axis=1)
 
         while len(centers) < k:
-            next_idx = max(range(n), key=lambda idx: min_dists[idx])
+            next_idx = int(np.argmax(min_dists))
             if min_dists[next_idx] == 0:
                 remaining = [idx for idx in range(n) if idx not in centers]
                 if not remaining:
                     break
                 next_idx = random.choice(remaining)
             centers.append(next_idx)
-            for idx, vec in enumerate(features):
-                dist = self._euclidean_dist(vec, features[next_idx])
-                if dist < min_dists[idx]:
-                    min_dists[idx] = dist
+            diff = feature_array - feature_array[next_idx]
+            candidate_dists = np.sum(diff * diff, axis=1)
+            min_dists = np.minimum(min_dists, candidate_dists)
 
         while len(centers) < k:
             candidate = random.randint(0, n - 1)
@@ -362,6 +375,7 @@ class ClusteringEngine:
 
     def _init_centers_by_category(self, features, categories, k):
         """按视频类目分层初始化中心，避免未选中类目全部贴到同一个随机中心。"""
+        feature_array = np.asarray(features, dtype=np.float32)
         category_counts = defaultdict(int)
         for cat in categories:
             category_counts[cat] += 1
@@ -373,7 +387,6 @@ class ClusteringEngine:
             buckets[bucket].append(cat)
             bucket_sizes[bucket] += count
 
-        dim = len(features[0]) if features else 0
         centers = []
         for bucket_cats in buckets:
             indexes = [
@@ -381,13 +394,9 @@ class ClusteringEngine:
                 if cat in bucket_cats
             ]
             if not indexes:
-                indexes = [random.randint(0, len(features) - 1)]
+                indexes = [random.randint(0, len(feature_array) - 1)]
 
-            center = [0.0] * dim
-            for idx in indexes:
-                for d, value in enumerate(features[idx]):
-                    center[d] += value
-            centers.append([value / len(indexes) for value in center])
+            centers.append(feature_array[indexes].mean(axis=0).tolist())
 
         return centers
 

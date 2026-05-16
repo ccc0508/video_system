@@ -105,6 +105,9 @@ features = cluster_engine.build_video_features(videos, cluster_behaviors, num_us
 dist_same_audience = cluster_engine._euclidean_dist(features[0], features[1])
 dist_same_content = cluster_engine._euclidean_dist(features[0], features[2])
 assert dist_same_audience < dist_same_content
+labels, centers = cluster_engine.kmeans(features, k=2, max_iter=5)
+assert len(labels) == len(videos)
+assert len(centers) == 2
 print("✓ Video clustering uses watched-user similarity OK")
 
 print("\n全部数据结构测试通过！")
