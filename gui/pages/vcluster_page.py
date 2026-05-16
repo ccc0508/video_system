@@ -39,7 +39,7 @@ class ClusterWorker(QThread):
                 self.videos, self.behaviors, len(self.users),
                 progress_callback=lambda c, t: self.progress.emit(c, t)
             )
-            labels, centers = self.engine.kmeans(features, self.k, max_iter=30)
+            labels, centers = self.engine.kmeans_videos(features, self.k, max_iter=30)
             cluster_info = self.engine.get_cluster_info(labels, self.videos, "video")
             self.finished.emit(labels, centers, cluster_info)
         except Exception as e:
@@ -163,7 +163,8 @@ class VClusterPage(QWidget):
 
         self.cluster_table.setRowCount(len(cluster_info))
         for i, info in enumerate(cluster_info):
-            self.cluster_table.setItem(i, 0, QTableWidgetItem(str(info["cluster_id"])))
+            cluster_name = self._cluster_name(info)
+            self.cluster_table.setItem(i, 0, QTableWidgetItem(cluster_name))
             self.cluster_table.setItem(i, 1, QTableWidgetItem(str(info["size"])))
             top_cats = info.get("top_categories", [])
             cats_str = ", ".join(f"{c}({n})" for c, n in top_cats[:3])
@@ -173,7 +174,10 @@ class VClusterPage(QWidget):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         sizes = [info["size"] for info in cluster_info]
-        labels_pie = [f"簇{info['cluster_id']}\n({info['size']})" for info in cluster_info]
+        labels_pie = [
+            f"{self._cluster_name(info)}\n({info['size']})"
+            for info in cluster_info
+        ]
         colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6',
                   '#1abc9c', '#e67e22', '#34495e', '#16a085', '#c0392b',
                   '#8e44ad', '#27ae60', '#d35400', '#2980b9', '#f1c40f',
@@ -189,7 +193,8 @@ class VClusterPage(QWidget):
             return
         info = self._cluster_info[row]
         members = info["members"]
-        self.detail_label.setText(f"簇 {info['cluster_id']} 的视频（共 {info['size']}，显示前50）")
+        cluster_name = self._cluster_name(info)
+        self.detail_label.setText(f"{cluster_name} 的视频（共 {info['size']}，显示前50）")
 
         self.detail_table.setRowCount(len(members))
         for i, v in enumerate(members):
@@ -201,3 +206,7 @@ class VClusterPage(QWidget):
     def _on_error(self, err):
         self.run_btn.setEnabled(True)
         QMessageBox.critical(self, "错误", f"聚类出错: {err}")
+
+    @staticmethod
+    def _cluster_name(info):
+        return info.get("cluster_name", f"簇{info['cluster_id']}")

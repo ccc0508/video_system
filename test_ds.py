@@ -108,6 +108,26 @@ assert dist_same_audience < dist_same_content
 labels, centers = cluster_engine.kmeans(features, k=2, max_iter=5)
 assert len(labels) == len(videos)
 assert len(centers) == 2
+video_labels, video_centers = cluster_engine.kmeans_videos(
+    features, k=2, max_iter=5, min_unique_watchers=2
+)
+assert video_labels == [0, 0, 1] or video_labels == [1, 1, 0]
+assert len(video_centers) == 2
+
+low_watch_videos = videos + [{"video_id": 3, "category": "科技", "tags": ["c"]}]
+low_watch_behaviors = cluster_behaviors + [[2, 3, "watch", 0, 10]]
+low_watch_engine = ClusteringEngine()
+low_watch_features = low_watch_engine.build_video_features(
+    low_watch_videos, low_watch_behaviors, num_users=6
+)
+low_watch_labels, _ = low_watch_engine.kmeans_videos(
+    low_watch_features, k=2, max_iter=5, min_unique_watchers=2
+)
+assert low_watch_labels[3] == -1
+low_watch_info = low_watch_engine.get_cluster_info(
+    low_watch_labels, low_watch_videos, "video"
+)
+assert any(info.get("cluster_name") == "低观看/无观看视频" for info in low_watch_info)
 print("✓ Video clustering uses watched-user similarity OK")
 
 print("\n全部数据结构测试通过！")

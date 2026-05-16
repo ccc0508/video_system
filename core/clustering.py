@@ -23,6 +23,7 @@ class ClusteringEngine:
         self.centers = []
         self.labels = []
         self.features = []
+        self.video_unique_watch_counts = []
 
     def build_video_features(self, videos, behaviors, num_users, progress_callback=None):
         """
@@ -90,8 +91,57 @@ class ClusteringEngine:
             progress_callback(total, total)
 
         self.features = features.tolist()
+        self.video_unique_watch_counts = [
+            len(video_unique_users.get(vid, set()))
+            for vid in range(num_videos)
+        ]
         self._video_feature_categories = None
         return self.features
+
+    def kmeans_videos(self, features, k=5, max_iter=50, min_unique_watchers=2, progress_callback=None):
+        """
+        视频聚类：低观看视频单独成簇，其余视频按观看用户集合特征做 K-Means。
+
+        Args:
+            features: build_video_features 返回的特征矩阵
+            k: 常规视频聚类数
+            max_iter: 最大迭代次数
+            min_unique_watchers: 低于该唯一观看用户数的视频归入低观看簇
+            progress_callback: 进度回调
+
+        Returns:
+            labels: 与原视频列表等长的簇标签，-1 表示低观看/无观看簇
+            centers: 常规 K-Means 中心，不包含低观看簇
+        """
+        total = len(features)
+        if total == 0:
+            return [], []
+
+        watch_counts = self.video_unique_watch_counts or [0] * total
+        active_indices = [
+            idx for idx, count in enumerate(watch_counts)
+            if count >= min_unique_watchers
+        ]
+
+        labels = [-1] * total
+        if not active_indices:
+            self.labels = labels
+            self.centers = []
+            return labels, []
+
+        active_features = [features[idx] for idx in active_indices]
+        active_k = min(k, len(active_features))
+        active_labels, centers = self.kmeans(
+            active_features, active_k, max_iter=max_iter,
+            progress_callback=progress_callback
+        )
+
+        for original_idx, label in zip(active_indices, active_labels):
+            labels[original_idx] = label
+
+        self.labels = labels
+        self.centers = centers
+        return labels, centers
 
     def build_user_features(self, users, behaviors, videos, progress_callback=None):
         """
@@ -304,6 +354,8 @@ class ClusteringEngine:
 
             # 分析共同特征
             if item_type == "video":
+                if cluster_id == -1:
+                    info["cluster_name"] = "低观看/无观看视频"
                 cat_counts = defaultdict(int)
                 for m in members:
                     cat_counts[m.get("category", "")] += 1
